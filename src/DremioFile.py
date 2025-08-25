@@ -277,7 +277,8 @@ class DremioFile():
 			self._collect_directory(os.path.join(source_directory, 'referenced_roles'), None, None, dremio_data.referenced_roles)
 			self._collect_directory(os.path.join(source_directory, 'queues'), None, None, dremio_data.queues)
 			self._collect_directory(os.path.join(source_directory, 'rules'), None, None, rules)
-			dremio_data.rules = rules[0]
+			if len (rules) > 0 :
+				dremio_data.rules = rules[0]
 			self._collect_directory(os.path.join(source_directory, 'tags'), None, None, dremio_data.tags)
 			self._collect_directory(os.path.join(source_directory, 'wikis'), None, None, dremio_data.wikis)
 			self._collect_directory(os.path.join(source_directory, 'vds_parents'), None, None, dremio_data.vds_parents)
