@@ -286,8 +286,19 @@ class DremioReader:
 		return
 
 	def _read_function(self, function):
-		self._logger.warn("_read_function via catalog or API not yet supported: skipping function: " + self._utils.normalize_path(function.get('path', '')))
-		return
+		self._logger.debug("_read_function: for entity " + self._utils.get_entity_desc(function))
+		if self._config.udf_process_mode == 'process':
+			udf = self._get_entity_definition_by_id(function)
+			if udf is not None:
+				if "createdAt" in udf:
+					udf.pop("createdAt")
+				if "tag" in udf:
+					udf.pop("tag")
+				udf["entity_id"] = function['id']
+				if udf not in self._d.udfs:
+					self._d.udfs.append(udf)
+		else:
+			self._logger.debug("_read_function: skipping user defined function processing as per job configuration")
 
 	def _read_reflections(self):
 		self._logger.debug("_read_reflections: starting")
@@ -472,7 +483,7 @@ class DremioReader:
 
 	# Helper method, used by most read* methods
 	def _get_entity_definition_by_id(self, src):
-		self._logger.debug("_get_entity_definition_by_id: processing src: " + self._utils.get_entity_desc(src))
+		self._logger.debug("_get_entity_definition_by_id: processing entity: " + self._utils.get_entity_desc(src))
 		if 'id' not in src:
 			self._logger.error("_read_entity_definition: bad data, skipping entity: " + self._utils.get_entity_desc(src))
 			return None

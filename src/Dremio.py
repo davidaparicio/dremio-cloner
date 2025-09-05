@@ -397,8 +397,9 @@ class Dremio:
 					return self._api_get_json(url, source, report_error, True)
 				logging.critical(source + ": received HTTP Response Code " + str(response.status_code) +
 								 " for : <" + str(url) + ">" + self._get_error_message(response))
-				raise RuntimeError(
-					"Specified user does not have sufficient privileges to create objects in the target Dremio Environment.")
+				return None
+				#raise RuntimeError(
+				#	"Specified user does not have sufficient privileges to read objects in the target Dremio Environment.")
 			else:
 				if report_error:
 					logging.error(source + ": received HTTP Response Code " + str(response.status_code) +

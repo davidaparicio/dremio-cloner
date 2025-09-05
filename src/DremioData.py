@@ -29,6 +29,7 @@ class DremioData():
 	rules = []
 	tags = []
 	wikis = []
+	udfs = []
 	referenced_users = []
 	referenced_roles = []
 	files = []

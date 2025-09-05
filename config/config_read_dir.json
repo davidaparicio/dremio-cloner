@@ -33,6 +33,7 @@
 	{"wiki.process_mode": "process"},
 	{"tag.process_mode": "process"},
 	{"home.process_mode": "process"},
+	{"udf.process_mode": "process"},
 	{"folder.process_mode": "process"},
 	{"vds.process_mode": "process"},
 	{"pds.process_mode": "process"},

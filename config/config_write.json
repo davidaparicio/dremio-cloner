@@ -33,6 +33,7 @@
 	  	{"wiki.process_mode": "create_overwrite"},
 		{"tag.process_mode": "process"},
 		{"home.process_mode": "process"},
+		{"udf.process_mode": "create_overwrite"},
 		{"wlm.queue.process_mode": "create_overwrite"},
 		{"wlm.rule.process_mode": "create_overwrite"},
 

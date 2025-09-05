@@ -173,6 +173,11 @@ class DremioWriter:
 		else:
 			for tags in self._d.tags:
 				self._write_tags(tags, self._config.tag_process_mode)
+		if self._config.udf_process_mode == 'skip':
+			self._logger.info("write_dremio_environment: Skipping user defined function processing due to configuration udf.process_mode=skip.")
+		else:
+			for udf in self._d.udfs:
+				self._write_udf(udf, self._config.udf_process_mode)
 		if self._config.wlm_queue_process_mode == 'skip':
 			self._logger.info("write_dremio_environment: Skipping wlm queue processing due to configuration wlm.queue.process_mode=skip.")
 		else:
@@ -1222,6 +1227,58 @@ class DremioWriter:
 				self._logger.error("_write_tags: Error updating " + str(tags))
 				return False
 		return True
+
+
+	def _write_udf(self, udf, process_mode):
+		self._logger.debug("_write_udf: processing udf: " + self._utils.get_entity_desc(udf))
+		# clean up the object
+		if 'id' in udf:
+			udf.pop("id")
+		if 'lastModified' in udf:
+			udf.pop("lastModified")
+		new_function_body = udf['functionBody']
+		new_function_arg_list = udf['functionArgList']
+		new_return_type = udf['returnType']
+		new_is_scalar = udf['isScalar']
+		udf_path = udf['path']
+		# Check if the udf already exists
+		existing_udf_entity = self._find_existing_dataset_by_path(self._utils.normalize_path(udf_path))
+		if existing_udf_entity is None:  # Need to create new entity
+			if process_mode == 'update_only':
+				self._logger.info("_write_udf: Skipping user defined function creation due to configuration udf_process_mode. " + self._utils.get_entity_desc(udf))
+				return None
+			if self._config.dry_run:
+				self._logger.warn("_write_udf: Dry Run, NOT Creating user defined function: " + self._utils.get_entity_desc(udf))
+				return None
+			self._logger.debug("_write_udf: Creating " + self._utils.get_entity_desc(udf))
+			new_udf = self._dremio_env.create_catalog_entity(udf, self._config.dry_run)
+			if new_udf is None:
+				self._logger.error("_write_udf: could not create " + self._utils.get_entity_desc(udf))
+				return None
+		else:  # udf already exists in the target environment
+			existing_udf = self._dremio_env.get_catalog_entity_by_id(existing_udf_entity['id'])
+			if process_mode == 'create_only':
+				self._logger.info("_write_udf: Found existing user defined function and udf_process_mode is set to create_only. Skipping " + self._utils.get_entity_desc(udf))
+				return None
+			# make sure there are changes to update as it will invalidate existing udf data
+			if new_function_body == existing_udf['functionBody']:
+				# Nothing to do
+				self._logger.debug("_write_udf: No pending changes. Skipping " + self._utils.get_entity_desc(udf))
+				return None
+			if self._config.dry_run:
+				self._logger.warn("_write_udf: Dry Run, NOT Updating " + self._utils.get_entity_desc(udf))
+				return False
+			self._logger.debug("_write_udf: Overwriting " + self._utils.get_entity_desc(udf))
+			existing_udf['functionBody'] = new_function_body
+			existing_udf['functionArgList'] = new_function_arg_list
+			existing_udf['returnType'] = new_return_type
+			existing_udf['isScalar'] = new_is_scalar
+			updated_udf = self._dremio_env.update_catalog_entity(existing_udf_entity['id'], existing_udf, self._config.dry_run)
+			if updated_udf is None:
+				self._logger.error("_write_udf: Error updating " + self._utils.get_entity_desc(udf))
+				return False
+		return True
+
 
 	def _write_wlm_queue(self, queue, process_mode):
 		self._logger.debug("_write_queue: processing queue: " + str(queue))
