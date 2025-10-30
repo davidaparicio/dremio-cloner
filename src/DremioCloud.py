@@ -73,6 +73,7 @@ class DremioCloud:
 		self._project_id = project_id
 		self._username = username
 		self._password = password
+		self._detect_api_version()
 		self._authenticate()
 
 	# Auth flow caters for user/password or PAT login
@@ -349,7 +350,8 @@ class DremioCloud:
 	# Returns JSON if success or None
 	def _api_get_json(self, url, source="", report_error=True, reauthenticate=False):
 		if reauthenticate:
-			self._authenticate()
+			self._detect_api_version()
+		self._authenticate()
 		# Extract source
 		source_name = None
 		pos = url.find(self._catalog_url_by_path)
@@ -405,7 +407,8 @@ class DremioCloud:
 	# Returns JSON if success or None
 	def _api_post_json(self, url, json_data, source="", as_json=True, reauthenticate=False):
 		if reauthenticate:
-			self._authenticate()
+			self._detect_api_version()
+		self._authenticate()
 		try:
 			if json_data is None:
 				response = self._session.request("POST", self._endpoint + url, headers=self._headers, timeout=self._api_timeout, verify=self._verify_ssl)
@@ -449,7 +452,8 @@ class DremioCloud:
 	# Returns JSON if success or None
 	def _api_put_json(self, url, json_data, source="", report_error = True, reauthenticate=False):
 		if reauthenticate:
-			self._authenticate()
+			self._detect_api_version()
+		self._authenticate()
 		try:
 			response = self._session.request("PUT", self._endpoint + url, json=json_data, headers=self._headers, timeout=self._api_timeout, verify=self._verify_ssl)
 			if response.status_code == 200:
@@ -497,7 +501,8 @@ class DremioCloud:
 	# Returns JSON if success or None
 	def _api_delete(self, url, source="", report_error = True, reauthenticate=False):
 		if reauthenticate:
-			self._authenticate()
+			self._detect_api_version()
+		self._authenticate()
 		try:
 			response = self._session.request("DELETE", self._endpoint + url, headers=self._headers, timeout=self._api_timeout, verify=self._verify_ssl)
 			if response.status_code == 200:
@@ -560,3 +565,16 @@ class DremioCloud:
 			return urllib.parse.quote_plus(path)
 		else:
 			return urllib.quote_plus(path)
+	def _detect_api_version(self):
+		"""Detect API version based on endpoint structure"""
+		if 'staging.dremio.site' in self._endpoint or 'test.dremio.site' in self._endpoint:
+			self._api_version = "v2"
+			logging.info("Detected Dremio Cloud V2 (serverless) API endpoint")
+		else:
+			self._api_version = "v1"
+			logging.info("Detected Dremio V1 (standard) API endpoint")
+
+	def set_serverless_mode(self, is_serverless):
+		"""Set serverless mode flag"""
+		self._is_serverless = is_serverless
+
