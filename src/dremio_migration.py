@@ -1,8 +1,7 @@
 import sys
 
-from mo_parsing import ParseException
-from mo_sql_parsing import parse
-from mo_sql_parsing import format
+import sqlglot
+from sqlglot import exp
 import sqlparse
 
 from DremioFile import DremioFile
@@ -10,6 +9,7 @@ from DremioClonerConfig import DremioClonerConfig
 import json
 import uuid
 import os
+import re
 
 reserved_words = ['abs', 'asc', 'all', 'allocate', 'allow', 'alter', 'and', 'any', 'are', 'array', 'array_max_cardinality',
                   'as', 'asensitive', 'asymmetric', 'at', 'atomic', 'authorization', 'avg', 'begin', 'begin_frame',
@@ -147,365 +147,258 @@ def on_clause_replace(clause, src_path, dst_path, vds_path_str, log_text):
                     _newvalue = dst_path + item[len(src_path):]
                     clause[idx] = _newvalue
                     print(log_text + ' - Matching VDS SQL ON CLAUSE (' + (vds_path_str) + '): ' + item + ' -> ' + _newvalue)
-            else:
-                print("UNSUPPORTED TYPE IN on_clause_replace: " + str(type(clause)))
-    else:
-        print("UNSUPPORTED TYPE IN on_clause_replace: " + str(type(clause)))
 
-def replace_table_names(parsed, vds_path, src_path, dst_path, log_text):
-    vds_path_str = '.'.join(vds_path)
-    if isinstance(parsed, dict):
-        for _key, _value in parsed.items():
-            if isinstance(_value, list) or isinstance(_value, dict):
-                replace_table_names(_value, vds_path, src_path, dst_path, log_text)
-            elif isinstance(_value, str):
-                if _value.lower().startswith(src_path.lower()):
-                    _newvalue = dst_path + _value[len(src_path):]
-                    parsed[_key] = _newvalue
-                    print(log_text + ' - Matching VDS SQL (' + (vds_path_str) + '): ' + _value + ' -> ' + _newvalue)
-            elif _value != None and not isinstance(_value, (int, float, bool, complex)):
-                print("ERROR: _value is of type " + str(_value))
-    elif isinstance(parsed, list):
-        for idx, item in enumerate(parsed):
-            if isinstance(item, str):
-                if item.lower().startswith(src_path.lower()):
-                    _newvalue = dst_path + item[len(src_path):]
-                    parsed[idx] = _newvalue
-                    print(log_text + ' - Matching VDS SQL (' + (vds_path_str) + '): ' + item + ' -> ' + _newvalue)
-            else:
-                replace_table_names(item, vds_path, src_path, dst_path, log_text)
-    elif parsed != None and not isinstance(parsed, (int, float, bool, complex)):
-        print("ERROR: Passed parsed needs to be of type DICT or LIST: " + str(type(parsed)))
+def migrate_sql_with_string_replacement(sql_text, source_migrations, vds_path_str):
+    """
+    Migrate SQL using string replacement to preserve ALL formatting including:
+    - Original line breaks (\r\n, \n, etc.)
+    - Comments (both -- and /* */)
+    - Whitespace and indentation
+    - Everything else exactly as it was
+    """
+    if not sql_text:
+        return sql_text
+    
+    migrated_sql = sql_text
+    replacements_made = []
+    
+    for migration in source_migrations:
+        src_path = '.'.join(migration['srcPath'])
+        dst_path = '.'.join(migration['dstPath'])
+        
+        # Find all occurrences (case-insensitive) and replace them
+        # Using regex with word boundaries to avoid partial matches
+        pattern = re.escape(src_path)
+        
+        # Count occurrences for logging
+        matches = list(re.finditer(pattern, migrated_sql, re.IGNORECASE))
+        
+        if matches:
+            # Replace all occurrences
+            migrated_sql = re.sub(pattern, dst_path, migrated_sql, flags=re.IGNORECASE)
+            replacements_made.append({
+                'src': src_path,
+                'dst': dst_path,
+                'count': len(matches)
+            })
+    
+    # Log replacements
+    for replacement in replacements_made:
+        print(f"String Replacement - VDS ({vds_path_str}): {replacement['src']} -> {replacement['dst']} ({replacement['count']} occurrences)")
+    
+    return migrated_sql
 
+def replace_table_names(parsed_sql_obj, vds_path, src_path, dst_path, log_text):
+    """
+    Replace table names in sqlglot parsed SQL object
+    """
+    if not isinstance(parsed_sql_obj, (exp.Expression, dict)):
+        return
+    
+    # If it's a sqlglot expression, traverse it
+    if isinstance(parsed_sql_obj, exp.Expression):
+        for node in parsed_sql_obj.walk():
+            if isinstance(node, exp.Table):
+                table_name = node.sql(dialect="dremio")
+                # Remove quotes for comparison
+                clean_table = table_name.replace('"', '')
+                if clean_table.lower().startswith(src_path.lower().replace('\\', '')):
+                    new_table = dst_path.replace('\\', '') + clean_table[len(src_path.replace('\\', '')):]
+                    vds_path_str = '.'.join(vds_path)
+                    print(log_text + ' - Matching VDS SQL (' + vds_path_str + '): ' + clean_table + ' -> ' + new_table)
+                    # Update the table name
+                    parts = new_table.split('.')
+                    # Set the table name (last part)
+                    node.set("this", exp.Identifier(this=parts[-1]))
+                    # Handle multi-part schemas properly
+                    if len(parts) == 2:
+                        # Just schema.table
+                        node.set("db", exp.Identifier(this=parts[0]))
+                        node.args.pop("catalog", None)
+                    elif len(parts) == 3:
+                        # catalog.schema.table
+                        node.set("catalog", exp.Identifier(this=parts[0]))
+                        node.set("db", exp.Identifier(this=parts[1]))
+                    elif len(parts) > 3:
+                        # catalog.schema1.schema2...table
+                        node.set("catalog", exp.Identifier(this=parts[0]))
+                        node.set("db", exp.Identifier(this='.'.join(parts[1:-1])))
+    # If it's a dict (from original parsed format), handle it
+    elif isinstance(parsed_sql_obj, dict):
+        if 'from' in parsed_sql_obj:
+            handle_from_clause(parsed_sql_obj['from'], src_path, dst_path, vds_path, log_text)
+        if 'join' in parsed_sql_obj:
+            handle_join_clause(parsed_sql_obj['join'], src_path, dst_path, vds_path, log_text)
+        if 'on' in parsed_sql_obj:
+            on_clause_replace(parsed_sql_obj['on'], src_path, dst_path, '.'.join(vds_path), log_text)
+        # Recursively handle nested structures
+        for key, value in parsed_sql_obj.items():
+            if isinstance(value, (dict, list)):
+                replace_table_names(value, vds_path, src_path, dst_path, log_text)
+    elif isinstance(parsed_sql_obj, list):
+        for item in parsed_sql_obj:
+            replace_table_names(item, vds_path, src_path, dst_path, log_text)
+
+def handle_from_clause(from_clause, src_path, dst_path, vds_path, log_text):
+    if isinstance(from_clause, str):
+        if from_clause.lower().startswith(src_path.lower().replace('\\', '')):
+            return dst_path.replace('\\', '') + from_clause[len(src_path.replace('\\', '')):]
+    elif isinstance(from_clause, dict):
+        if 'value' in from_clause and isinstance(from_clause['value'], str):
+            if from_clause['value'].lower().startswith(src_path.lower().replace('\\', '')):
+                _newvalue = dst_path.replace('\\', '') + from_clause['value'][len(src_path.replace('\\', '')):]
+                vds_path_str = '.'.join(vds_path)
+                print(log_text + ' - Matching VDS SQL (' + vds_path_str + '): ' + from_clause['value'] + ' -> ' + _newvalue)
+                from_clause['value'] = _newvalue
+    elif isinstance(from_clause, list):
+        for item in from_clause:
+            handle_from_clause(item, src_path, dst_path, vds_path, log_text)
+
+def handle_join_clause(join_clause, src_path, dst_path, vds_path, log_text):
+    if isinstance(join_clause, dict):
+        if 'value' in join_clause and isinstance(join_clause['value'], str):
+            if join_clause['value'].lower().startswith(src_path.lower().replace('\\', '')):
+                _newvalue = dst_path.replace('\\', '') + join_clause['value'][len(src_path.replace('\\', '')):]
+                vds_path_str = '.'.join(vds_path)
+                print(log_text + ' - Matching VDS SQL (' + vds_path_str + '): ' + join_clause['value'] + ' -> ' + _newvalue)
+                join_clause['value'] = _newvalue
+        # Handle nested joins
+        for key, value in join_clause.items():
+            if isinstance(value, (dict, list)) and key != 'value':
+                replace_table_names(value, vds_path, src_path, dst_path, log_text)
+    elif isinstance(join_clause, list):
+        for item in join_clause:
+            handle_join_clause(item, src_path, dst_path, vds_path, log_text)
 
 def should_quote(identifier, dremio_data):
-    if identifier == '*':
-        return False
-    if identifier == 'day':
-        # TIMESTAMPDIFF requires non-quoted 'day'
-        # that also means we are not able to handle columns named 'day'
-        print('WARNING: Column with name \'day\' found, please rename column, because it will not be quoted, since it is a function for TIMESTAMPDIFF.')
-        return False
-    # return True
-    lowerId = identifier.lower()
-    if lowerId in reserved_words:
+    """
+    Determine if an identifier should be quoted
+    """
+    if identifier.lower() in reserved_words:
         return True
-    if identifier[0].isdigit():
-        # if starts with digit needs to be quoted
+    # Check if it contains special characters
+    if not identifier.replace('_', '').replace('-', '').isalnum():
         return True
-    if not identifier.isalnum():
+    # Check if it starts with a number
+    if identifier and identifier[0].isdigit():
         return True
-    # for vds in dremio_data.vds_list:
-    #     if identifier in vds['path']:
-    #         return True
-    # for pds in dremio_data.pds_list:
-    #     if identifier in pds['path']:
-    #         return True
     return False
 
-def write_error_files(config, vds, content, err_idx):
-    folder = None
-    if config.target_filename is not None:
-        folder = config.target_filename + '_errors'
-        os.makedirs(folder, exist_ok=True)
-    elif config.target_directory is not None:
-        folder = config.target_directory + '_errors'
-        os.makedirs(folder, exist_ok=True)
+def write_error_files(destination_file, vds, error_message, error_idx):
+    """
+    Write error information to files
+    """
+    # Create error directory next to destination file
+    if destination_file:
+        error_dir = os.path.join(os.path.dirname(destination_file), 'errors')
     else:
-        raise Exception('Target filename or directory must be specified.')
+        error_dir = 'errors'
+    os.makedirs(error_dir, exist_ok=True)
+    
+    error_file = os.path.join(error_dir, f'error_{error_idx}.txt')
+    with open(error_file, 'w') as f:
+        f.write(f"VDS Path: {'.'.join(vds['path'])}\n")
+        f.write(f"Error: {error_message}\n")
+        f.write(f"\nOriginal SQL:\n{vds.get('sql', 'N/A')}\n")
+        if 'parsedSql' in vds:
+            f.write(f"\nParsed SQL Object:\n{json.dumps(vds['parsedSql'], indent=2)}\n")
 
-    error_file_path = os.path.join(folder, 'error_' + str(err_idx) + '.txt')
-    error_file = open(error_file_path, "w")
-    error_file.write(content)
-    error_file.close()
+def parse_sql(sql_text):
+    """
+    Parse SQL using sqlglot with Dremio dialect
+    """
+    try:
+        # Try parsing with Dremio dialect
+        parsed = sqlglot.parse_one(sql_text, dialect="dremio")
+        return parsed
+    except Exception as e:
+        # Fallback to default dialect
+        try:
+            parsed = sqlglot.parse_one(sql_text)
+            return parsed
+        except Exception as e2:
+            raise Exception(f"Failed to parse SQL: {str(e)}, Fallback error: {str(e2)}")
 
-    sql_file_path = os.path.join(folder, 'error_' + str(err_idx) + '.sql')
-    sql_file = open(sql_file_path, "w")
-    sql_file.write(vds['sql'])
-    sql_file.close()
-
-
-def build_error_message_sql_parse(err, vds):
-    content = 'VDS:\n' + ('.'.join(vds['path'])) + '\n\n-----\n'
-    content += 'Message:\n' + err.message + '\n\n-----\n'
-    content += 'Line:\n' + err.line + '\n\n'
-    content += '\n--------------------\n'
-    for cause in err.causes:
-        content += str(cause) + '\n'
-    return content
-
+def format_sql(parsed_sql, dremio_data):
+    """
+    Format parsed SQL back to string using sqlglot
+    """
+    if isinstance(parsed_sql, exp.Expression):
+        # Use sqlglot to generate SQL
+        sql = parsed_sql.sql(dialect="dremio", pretty=True)
+        return sql
+    else:
+        # Fallback for dict-based parsing (shouldn't happen with sqlglot)
+        return str(parsed_sql)
 
 def main():
-    if len(sys.argv) != 2:
-        print("Please pass a configuration file.")
-        return
-
-    config_file = open(sys.argv[1], "r", encoding='utf-8')
-    migration_conf = json.load(config_file)
-    spaceFolderMigrations = migration_conf['spaceFolderMigrations']
-    sourceMigrations = migration_conf['sourceMigrations']
-    if 'sourceFile' in migration_conf:
-        config = DremioClonerConfig(migration_conf['sourceFile'])
-    else:
-        config = DremioClonerConfig(migration_conf['sourceDirectory'] + '\\___dremio_cloner_conf.json')
-
-    if 'sourceDirectory' in migration_conf:
-        config.source_directory = migration_conf['sourceDirectory']
-    if 'destinationDirectory' in migration_conf:
-        config.target_directory = migration_conf['destinationDirectory']
-    if 'sourceFile' in migration_conf:
-        config.source_filename = migration_conf['sourceFile']
-    if 'destinationFile' in migration_conf:
-        config.target_filename = migration_conf['destinationFile']
-
+    args = sys.argv
+    if len(args) < 2:
+        print('Please specify config json path')
+        exit(1)
+    
+    # Load config directly from JSON file
+    with open(sys.argv[1], 'r') as f:
+        config_data = json.load(f)
+    
+    # Extract paths and migrations from config
+    source_file = config_data.get('sourceFile')
+    destination_file = config_data.get('destinationFile')
+    sourceMigrations = config_data.get('sourceMigrations', [])
+    spaceFolderMigrations = config_data.get('spaceFolderMigrations', [])
+    
+    # Parse sourceMigrations - convert dot-separated paths to list format
+    for migration in sourceMigrations:
+        if 'srcPath' in migration and len(migration['srcPath']) == 1 and '.' in migration['srcPath'][0]:
+            migration['srcPath'] = migration['srcPath'][0].split('.')
+        if 'dstPath' in migration and len(migration['dstPath']) == 1 and '.' in migration['dstPath'][0]:
+            migration['dstPath'] = migration['dstPath'][0].split('.')
+    
+    if not source_file:
+        print('ERROR: sourceFile not specified in config')
+        exit(1)
+    
+    # Create a simple config object for DremioFile
+    class SimpleConfig:
+        def __init__(self, source_filename, target_filename):
+            self.source_filename = source_filename
+            self.target_filename = target_filename
+            self.source_directory = None
+            self.target_directory = None
+            self.source_endpoint = None
+            self.cloner_conf_json = []
+            self.home_process_mode = 'skip'
+            self.source_process_mode = 'skip'
+            self.space_process_mode = 'process'
+            self.folder_process_mode = 'process'
+            self.pds_process_mode = 'process'
+            self.vds_process_mode = 'process'
+            self.reflection_process_mode = 'skip'
+            self.user_process_mode = 'skip'
+            self.group_process_mode = 'skip'
+            self.wlm_queue_process_mode = 'skip'
+            self.wlm_rule_process_mode = 'skip'
+            self.tag_process_mode = 'skip'
+            self.wiki_process_mode = 'skip'
+            self.udf_process_mode = 'skip'
+            self.target_separate_sql_and_metadata_files = False
+            self.container_filename = '__CONTAINER__.json'
+            self.dremio_conf_filename = 'dremio_cloner.json'
+    
+    config = SimpleConfig(source_file, destination_file)
     file = DremioFile(config)
     dremio_data = file.read_dremio_environment()
 
-    # Only container types SPACE and FOLDER is migrated, no SOURCES
-    dremio_data.containers = [container for container in dremio_data.containers if container['containerType'] in ['SPACE', 'FOLDER']]
+    error_idx = 0
+    # Check if we need to repair some unreferenced folders after space removal
+    # TODO: we might need to remove a source or so but we have dependencies
+    #  which usually still exist and maybe work but are not reachable via UI
+    #  currently we just re-append them to the default space or the first folder existing
+    #  which contains a root node
+    unreferenced_folders = find_unreferenced_folders(dremio_data)
 
-    # Parse SQL in VDS list
-    new_vds_list = []
-    error_idx = 1
-    for vds in dremio_data.vds_list:
-        try:
-            print("PARSING SQL - VDS migration: " + '.'.join(vds['path']))
-            sql = replace_slashed_comments(vds['sql'])
-            vds['parsedSql'] = parse(sql)
-            new_vds_list.append(vds)
-        except ParseException as e:
-            content = build_error_message_sql_parse(e, vds)
-            write_error_files(config, vds, content, error_idx)
-            print("ERROR PARSING SQL - INVALID Query - VDS migration: " + '.'.join(vds['path']))
-            error_idx += 1
-    dremio_data.vds_list = new_vds_list
-
-    if spaceFolderMigrations is not None and len(spaceFolderMigrations) > 0:
-        for migration in spaceFolderMigrations:
-            # Migrate containers
-            #####################
-            for container in dremio_data.containers:
-                min_len = min(len(container['path']), len(migration['dstPath']))
-                if container['path'][:min_len] == migration['srcPath'][:min_len]:
-                    # space['id'] = str(uuid.uuid4())
-                    oldpath = container['path']
-                    container['path'] = migration['dstPath'][:min_len]
-                    print("Matching container: " + ('.'.join(oldpath)) + " -> " + ('.'.join(container['path'])))
-
-            # Migrate spaces
-            #####################
-            dst_space_exists = False
-            for space in dremio_data.spaces:
-                if space['name'] == migration['dstPath'][0]:
-                    dst_space_exists = True
-                    break
-
-            new_spaces = []
-            for space in dremio_data.spaces:
-                if space['name'] == migration['srcPath'][0]:
-                    if not dst_space_exists:
-                        oldspace = space['name']
-                        space['name'] = migration['dstPath'][0]
-                        print("Matching space: " + oldspace + " -> " + space['name'])
-                        # Delete children, that will be reconstructed in a later phase
-                        space['children'] = []
-                        new_spaces.append(space)
-                    else:
-                        print("Dropping old space: " + space['name'] + " because destination space already exists " + migration['dstPath'][0])
-                else:
-                    # not matching, just adding back
-                    new_spaces.append(space)
-            dremio_data.spaces = new_spaces
-
-            # Migrate folders
-            ####################
-            for folder in dremio_data.folders:
-                if path_matches(migration['srcPath'], folder['path']):
-                    # folder['id'] = str(uuid.uuid4())
-                    oldpath = folder['path']
-                    folder['path'] = rebuild_path(migration, oldpath)
-                    print("Matching folders: " + ('.'.join(oldpath)) + " -> " + ('.'.join(folder['path'])))
-                    # Delete children, that will be reconstructed in a later phase
-                    folder['children'] = []
-
-            # Migrate reflections
-            #####################
-            for reflection in dremio_data.reflections:
-                if path_matches(migration['srcPath'], reflection['path']):
-                    # reflection['id'] = str(uuid.uuid4())
-                    oldpath = reflection['path']
-                    reflection['path'] = rebuild_path(migration, oldpath)
-                    print("Matching reflection (" + reflection['name'] + "): " + ('.'.join(oldpath)) + " -> " + ('.'.join(reflection['path'])))
-
-            # Migrate tags
-            #####################
-            for tag in dremio_data.tags:
-                if path_matches(migration['srcPath'], tag['path']):
-                    oldpath = tag['path']
-                    tag['path'] = rebuild_path(migration, oldpath)
-                    print("Matching tag: " + ('.'.join(oldpath)) + " -> " + ('.'.join(tag['path'])))
-
-            # Migrate vds_parents
-            ####################
-            for vds_parent in dremio_data.vds_parents:
-                if path_matches(migration['srcPath'], vds_parent['path']):
-                    oldpath = vds_parent['path']
-                    vds_parent['path'] = rebuild_path(migration, oldpath)
-                    print("Matching vds_parent: " + ('.'.join(oldpath)) + " -> " + ('.'.join(vds_parent['path'])))
-
-                new_parents = []
-                for parent in vds_parent['parents']:
-                    src_path_lower = '/'.join(migration['srcPath']).lower()
-                    dst_path = '/'.join(migration['dstPath'])
-                    if parent.lower().startswith(src_path_lower):
-                        new_parents.append(dst_path + parent[len(src_path_lower):])
-                    else:
-                        new_parents.append(parent)
-                vds_parent['parents'] = new_parents
-                # vds_parent['parents'] = [parent.replace('/'.join(migration['srcPath']), '/'.join(migration['dstPath'])) for parent in vds_parent['parents']]
-
-            # Migrate vds_list
-            #####################
-            # src_permutations = generate_all_quoted_and_non_quoted_permutations(migration['srcPath'])
-            src_path = ".".join(migration['srcPath'])
-            dst_path = ".".join(migration['dstPath'])
-            for vds in dremio_data.vds_list:
-                if 'sqlContext' in vds and path_matches_sqlcontext(migration['srcPath'], vds['sqlContext']):
-                    oldpath = vds['sqlContext']
-                    vds['sqlContext'] = rebuild_path_sqlcontext(migration, oldpath)
-                    print("Matching VDS SQL Context: " + ('.'.join(oldpath)) + " -> " + ('.'.join(vds['sqlContext'])))
-                if path_matches(migration['srcPath'], vds['path']):
-                    oldpath = vds['path']
-                    vds['path'] = rebuild_path(migration, oldpath)
-                    print("Matching VDS path: " + ('.'.join(oldpath)) + " -> " + ('.'.join(vds['path'])))
-                replace_table_names(vds['parsedSql'], vds['path'], src_path, dst_path, 'VDS migration')
-
-            # Migrate wiki
-            #####################
-            for wiki in dremio_data.wikis:
-                if path_matches(migration['srcPath'], wiki['path']):
-                    oldpath = wiki['path']
-                    wiki['path'] = rebuild_path(migration, oldpath)
-                    print("Matching Wiki: " + ('.'.join(oldpath)) + " -> " + ('.'.join(wiki['path'])))
-
-        # Delete spaces which do not match any dstPath
-        non_matching_spaces = []
-        for space in dremio_data.spaces:
-            found = False
-            for migration in spaceFolderMigrations:
-                if migration['dstPath'][0] == space['name']:
-                    found = True
-                    break
-            if not found:
-                print("Dropping space which does not match any dstPath -> " + space['name'])
-                non_matching_spaces.append(space['name'])
-
-        dremio_data.spaces = [space for space in dremio_data.spaces if space['name'] not in non_matching_spaces]
-
-        # Delete folders which do not matching dstPath
-        non_matching_folders = []
-        for folder in dremio_data.folders:
-            found = False
-            for migration in spaceFolderMigrations:
-                min_len = min(len(migration['dstPath']), len(folder['path']))
-                dst_path = migration['dstPath'][:min_len]
-                folder_path = folder['path'][:min_len]
-                if dst_path == folder_path:
-                    found = True
-                    break
-            if not found:
-                print("Dropping folder which does not match any dstPath -> " + ".".join(folder['path']))
-                non_matching_folders.append(folder['path'])
-        dremio_data.folders = [folder for folder in dremio_data.folders if folder['path'] not in non_matching_folders]
-
-        # Delete non matching VDS definitions
-        non_matching_vds = []
-        for vds in dremio_data.vds_list:
-            found = False
-            for migration in spaceFolderMigrations:
-                min_len = min(len(migration['dstPath']), len(vds['path']))
-                dst_path = migration['dstPath'][:min_len]
-                vds_path = vds['path'][:min_len]
-                if dst_path == vds_path:
-                    found = True
-                    break
-            if not found:
-                print("Dropping VDS which does not match any dstPath -> " + ".".join(vds['path']))
-                non_matching_vds.append(vds['path'])
-        dremio_data.vds_list = [vds for vds in dremio_data.vds_list if vds['path'] not in non_matching_vds]
-
-        # Delete non matching tags definitions
-        non_matching_tags = []
-        for tag in dremio_data.tags:
-            found = False
-            for migration in spaceFolderMigrations:
-                min_len = min(len(migration['dstPath']), len(tag['path']))
-                dst_path = migration['dstPath'][:min_len]
-                tag_path = tag['path'][:min_len]
-                if dst_path == tag_path:
-                    found = True
-                    break
-            if not found:
-                print("Dropping Tag which does not match any dstPath -> " + ".".join(tag['path']))
-                non_matching_tags.append(tag['path'])
-        dremio_data.tags = [tag for tag in dremio_data.tags if tag['path'] not in non_matching_tags]
-
-        # Delete non matching tags definitions
-        non_matching_wikis = []
-        for wiki in dremio_data.wikis:
-            found = False
-            for migration in spaceFolderMigrations:
-                min_len = min(len(migration['dstPath']), len(wiki['path']))
-                dst_path = migration['dstPath'][:min_len]
-                wiki_path = wiki['path'][:min_len]
-                if dst_path == wiki_path:
-                    found = True
-                    break
-            if not found:
-                print("Dropping Wiki which does not match any dstPath -> " + ".".join(wiki['path']))
-                non_matching_wikis.append(wiki['path'])
-        dremio_data.wikis = [wiki for wiki in dremio_data.wikis if wiki['path'] not in non_matching_wikis]
-
-        # Built VDS references
-        unreferenced_vds = find_unreferenced_vds(dremio_data)
-        for vds in unreferenced_vds:
-            parent_folder_path = vds['path'][:-1]
-            if len(parent_folder_path) == 1:
-                parent_space = None
-                for space in dremio_data.spaces:
-                    if space['name'] == parent_folder_path[0]:
-                        parent_space = space
-                        break
-                if parent_space == None:
-                    print("ERROR - Space not found: " + parent_folder_path[0])
-                    exit(1)
-                else:
-                    print("Appending VDS " + ('.'.join(vds['path'])) + " to space " + ('.'.join(parent_space['name'])))
-                    parent_space['children'].append(
-                        {'id': vds['id'], 'path': vds['path'],
-                         'type': 'DATASET', 'datasetType': 'VIRTUAL'})
-            else:
-                parent_folder = None
-                for folder in dremio_data.folders:
-                    if folder['path'] == parent_folder_path:
-                        parent_folder = folder
-                        break
-                if parent_folder == None:
-                    print("No existing parent folder found, creating one: " + ('.'.join(parent_folder_path)))
-                    parent_folder = {
-                        'id': str(uuid.uuid4()),
-                        'accessControlList': {'roles': []},
-                        'entityType': 'folder',
-                        'path': parent_folder_path,
-                        'children': []
-                    }
-                    dremio_data.folders.insert(0, parent_folder)
-                print("Appending VDS " + ('.'.join(vds['path'])) + " to folder " + ('.'.join(parent_folder['path'])))
-                parent_folder['children'].append({'id': vds['id'], 'path': vds['path'],
-                         'type': 'DATASET', 'datasetType': 'VIRTUAL'})
-
-        # Generate missing folder is hierarchy
-        unreferenced_folders = find_unreferenced_folders(dremio_data)
+    if len(unreferenced_folders) > 0:
+        print("Detected unreferenced folders - fixing ...")
         while len(unreferenced_folders) > 0:
             for unreferenced_folder in unreferenced_folders:
                 parent_folder_path = unreferenced_folder['path'][:-1]
@@ -553,25 +446,96 @@ def main():
                     })
             unreferenced_folders = find_unreferenced_folders(dremio_data)
 
+    # Apply spaceFolderMigrations first (for spaces, folders, and VDS paths)
+    if spaceFolderMigrations is not None and len(spaceFolderMigrations) > 0:
+        print("Applying space/folder migrations...")
+        for migration in spaceFolderMigrations:
+            # Migrate space names
+            for space in dremio_data.spaces:
+                if 'path' in space and path_matches(migration['srcPath'], space['path']):
+                    oldpath = space['path']
+                    space['path'] = rebuild_path(migration, oldpath)
+                    if 'name' in space:
+                        space['name'] = space['path'][-1]
+                    print("Space/Folder Migration - Space path: " + '.'.join(oldpath) + " -> " + '.'.join(space['path']))
+                elif 'name' in space and len(migration['srcPath']) == 1 and space['name'] == migration['srcPath'][0]:
+                    # Handle spaces that only have 'name' field
+                    space['name'] = migration['dstPath'][0]
+                    if 'path' not in space:
+                        space['path'] = [space['name']]
+                    print("Space/Folder Migration - Space name: " + migration['srcPath'][0] + " -> " + space['name'])
+            
+            # Migrate folder paths
+            for folder in dremio_data.folders:
+                if 'path' in folder and path_matches(migration['srcPath'], folder['path']):
+                    oldpath = folder['path']
+                    folder['path'] = rebuild_path(migration, oldpath)
+                    print("Space/Folder Migration - Folder path: " + '.'.join(oldpath) + " -> " + '.'.join(folder['path']))
+            
+            # Migrate VDS paths
+            for vds in dremio_data.vds_list:
+                if 'path' in vds and path_matches(migration['srcPath'], vds['path']):
+                    oldpath = vds['path']
+                    vds['path'] = rebuild_path(migration, oldpath)
+                    print("Space/Folder Migration - VDS path: " + '.'.join(oldpath) + " -> " + '.'.join(vds['path']))
+            
+            # Update children references in spaces
+            for space in dremio_data.spaces:
+                for child in space.get('children', []):
+                    if 'path' in child and path_matches(migration['srcPath'], child['path']):
+                        oldpath = child['path']
+                        child['path'] = rebuild_path(migration, oldpath)
+                        print("Space/Folder Migration - Space child reference: " + '.'.join(oldpath) + " -> " + '.'.join(child['path']))
+            
+            # Update children references in folders
+            for folder in dremio_data.folders:
+                for child in folder.get('children', []):
+                    if 'path' in child and path_matches(migration['srcPath'], child['path']):
+                        oldpath = child['path']
+                        child['path'] = rebuild_path(migration, oldpath)
+                        print("Space/Folder Migration - Folder child reference: " + '.'.join(oldpath) + " -> " + '.'.join(child['path']))
+
+    # NEW APPROACH: Use string replacement instead of parsing/regenerating SQL
+    # This preserves ALL original formatting including \r\n, comments, etc.
+    print("Migrating VDS SQL using string replacement (preserves formatting)...")
+    
+    new_vds_list = []
+    for vds in dremio_data.vds_list:
+        try:
+            vds_path_str = '.'.join(vds['path'])
+            
+            if 'sql' in vds and vds['sql']:
+                # Apply string replacement migrations to preserve original formatting
+                if sourceMigrations and len(sourceMigrations) > 0:
+                    vds['sql'] = migrate_sql_with_string_replacement(
+                        vds['sql'], 
+                        sourceMigrations,
+                        vds_path_str
+                    )
+                print("MIGRATED SQL (preserved formatting) for: " + vds_path_str)
+            else:
+                print("NO SQL to migrate for: " + vds_path_str)
+            
+            new_vds_list.append(vds)
+        except Exception as e:
+            write_error_files(destination_file, vds, str(e), error_idx)
+            print("ERROR: Unable to migrate SQL for: " + '.'.join(vds['path']))
+            error_idx += 1
+    
+    dremio_data.vds_list = new_vds_list
+
+    # Update sqlContext for VDSs
     if sourceMigrations is not None and len(sourceMigrations) > 0:
         for migration in sourceMigrations:
-            # Migrate vds_list
-            #####################
-            # src_permutations = generate_all_quoted_and_non_quoted_permutations(migration['srcPath'])
-            # SQL parser escapes the dots so that they replacement matches
-            src_path_list = migration['srcPath'].copy()
-            src_path_list[-1] = src_path_list[-1].replace('.', '\\.')
-            dst_path_list = migration['dstPath'].copy()
-            dst_path_list[-1] = dst_path_list[-1].replace('.', '\\.')
-            src_path = ".".join(src_path_list)
-            dst_path = ".".join(dst_path_list)
-            # dst_path = ".".join(list(map(quote, migration['dstPath'])))
             for vds in dremio_data.vds_list:
                 if 'sqlContext' in vds and path_matches(migration['srcPath'], vds['sqlContext']):
                     oldpath = vds['sqlContext']
                     vds['sqlContext'] = rebuild_path(migration, oldpath)
                     print("Source Migration - Matching VDS SQL Context (" + '.'.join(vds['path']) + "): " + ('.'.join(oldpath)) + " -> " + ('.'.join(vds['sqlContext'])))
-                replace_table_names(vds['parsedSql'], vds['path'], src_path, dst_path, 'Source Migration')
+    
+    # Update vds_parents
+    if sourceMigrations is not None and len(sourceMigrations) > 0:
+        for migration in sourceMigrations:
             for vds_parent in dremio_data.vds_parents:
                 src_path = '/'.join(migration['srcPath'])
                 dst_path = '/'.join(migration['dstPath'])
@@ -579,39 +543,65 @@ def main():
                 for parent in vds_parent['parents']:
                     if parent.lower().startswith(src_path.lower()):
                         print("Matching vds_parent: " + ('.'.join(vds_parent['path'])) + " - changed dependency: " + src_path + " -> " + dst_path)
-                        # parents.append(parent.lstrip(src_path) + dst_path)
                         parents.append(dst_path + parent[len(src_path):])
                     else:
                         parents.append(parent)
-
                 vds_parent['parents'] = parents
-
-    new_vds_list = []
-    for vds in dremio_data.vds_list:
-        try:
-            sql = format(vds['parsedSql'], ansi_quotes=True, should_quote=lambda x: should_quote(x, dremio_data))
-            vds['sql'] = sqlparse.format(sql, reindent=True, indent_width=2)
-            print("GENERATE SQL for: " + '.'.join(vds['path']))
-            new_vds_list.append(vds)
-        except Exception as e:
-            write_error_files(config, vds, str(e), error_idx)
-            print("ERROR: Unable to generate SQL for: " + '.'.join(vds['path']))
-            error_idx += 1
-        vds.pop('parsedSql')
-    dremio_data.vds_list = new_vds_list
+    
+    # Also apply spaceFolderMigrations to vds_parents
+    if spaceFolderMigrations is not None and len(spaceFolderMigrations) > 0:
+        for migration in spaceFolderMigrations:
+            for vds_parent in dremio_data.vds_parents:
+                # Update the vds_parent path itself
+                if 'path' in vds_parent and path_matches(migration['srcPath'], vds_parent['path']):
+                    oldpath = vds_parent['path']
+                    vds_parent['path'] = rebuild_path(migration, oldpath)
+                    print("Space/Folder Migration - vds_parent path: " + '.'.join(oldpath) + " -> " + '.'.join(vds_parent['path']))
+                
+                # Update parent dependencies
+                if 'parents' in vds_parent:
+                    src_path = '/'.join(migration['srcPath'])
+                    dst_path = '/'.join(migration['dstPath'])
+                    parents = []
+                    for parent in vds_parent['parents']:
+                        if parent.lower().startswith(src_path.lower()):
+                            print("Space/Folder Migration - vds_parent dependency: " + ('.'.join(vds_parent.get('path', ['unknown']))) + " - changed: " + src_path + " -> " + dst_path)
+                            parents.append(dst_path + parent[len(src_path):])
+                        else:
+                            parents.append(parent)
+                    vds_parent['parents'] = parents
 
     new_pds_list = []
     for pds in dremio_data.pds_list:
+        if 'path' not in pds:
+            continue
+            
         pds_path = pds['path']
-        if sourceMigrations is not None and len(sourceMigrations) > 0:
+        migrated = False
+        
+        # First check spaceFolderMigrations
+        if spaceFolderMigrations is not None and len(spaceFolderMigrations) > 0:
+            for migration in spaceFolderMigrations:
+                if path_matches(migration['srcPath'], pds_path):
+                    oldpath = pds_path
+                    pds['path'] = rebuild_path(migration, oldpath)
+                    print("Space/Folder Migration - Moved PDS: " + '.'.join(oldpath) + ' -> ' + '.'.join(pds['path']))
+                    migrated = True
+                    break
+        
+        # Then check sourceMigrations
+        if not migrated and sourceMigrations is not None and len(sourceMigrations) > 0:
             for migration in sourceMigrations:
                 if path_matches(migration['srcPath'], pds_path):
                     oldpath = pds_path
                     pds['path'] = rebuild_path(migration, oldpath)
-                    print("Moved PDS: " + '.'.join(oldpath) + ' -> ' + '.'.join(pds['path']))
-                    new_pds_list.append(pds)
+                    print("Source Migration - Moved PDS: " + '.'.join(oldpath) + ' -> ' + '.'.join(pds['path']))
+                    migrated = True
                     # only one migration per pds path
                     break
+        
+        if migrated:
+            new_pds_list.append(pds)
 
     dremio_data.pds_list = new_pds_list
 
@@ -619,7 +609,12 @@ def main():
     dremio_data.sources = []
     dremio_data.homes = []
 
+    # Save using the same file object that was created at the beginning
     file.save_dremio_environment(dremio_data)
+    if destination_file:
+        print(f"Saved migrated data to: {destination_file}")
+    else:
+        print(f"Saved migrated data to: {source_file}")
 
 
 def find_unreferenced_folders(dremio_data):
