@@ -33,7 +33,7 @@ python dremio_migration.py [config_migration_file.json]
 Dremio Cloner requires Python 3 and requires some additional Python libraries, please install:
 
 ```
-$ pip install mo-sql-parsing requests
+$ pip install sqlglot requests
 ```
 
 If you are using Dremio Migration Tool, you additionally need to install `sqlparse`:
