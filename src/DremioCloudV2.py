@@ -15,7 +15,7 @@
 ########
 
 import logging
-from src.DremioCloud import DremioCloud
+from DremioCloud import DremioCloud
 
 ###
 # Dremio Cloud V2 (Serverless) API wrapper.
