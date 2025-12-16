@@ -1,4 +1,3 @@
-
 ########
 # Copyright (C) 2019-2020 Dremio Corporation
 #
@@ -15,27 +14,33 @@
 # limitations under the License.
 ########
 
-from mo_sql_parsing import parse
+import sqlglot
+from sqlglot import exp
 import json, re
 
 tablist = []
-def traverse(v, prefix=''):
-    if isinstance(v, dict):
-        for k, v2 in v.items():
-            p2 = "{}['{}']".format(prefix, k)
-            traverse(v2, p2)
-    elif isinstance(v, list):
-        for i, v2 in enumerate(v):
-            p2 = "{}".format(prefix)
-            traverse(v2, p2)
-    else:
-        if (prefix.endswith("['from']['value']") 
-            or prefix.endswith("['from']") 
-            or prefix.endswith(" join']['value']")
-            or prefix.endswith(" join']")):
-            # print(repr(v))
-            tablist.append(repr(v).replace("'","").replace(".","/"))
-
+def traverse(node, prefix=''):
+    """
+    Traverse sqlglot AST to find table references.
+    This replaces the original dict/list traversal logic.
+    """
+    if isinstance(node, exp.Table):
+        # Extract table name, handling quoted identifiers and multi-part names
+        table_name = node.sql(dialect='postgres')  # Use postgres dialect for better compatibility
+        # Replace dots with slashes to match original behavior
+        table_name = table_name.replace('"', '').replace('.', '/')
+        tablist.append(table_name)
+    
+    # Recursively traverse child nodes
+    if hasattr(node, 'args'):
+        for key, value in node.args.items():
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, exp.Expression):
+                        traverse(item, prefix)
+            elif isinstance(value, exp.Expression):
+                traverse(value, prefix)
+    
     return tablist
 
 def tables_in_query_b(sql_str):
@@ -86,6 +91,8 @@ def normalize_path(token):
 	return path[:-1]
 
 def tables_in_query_a(sql):
+    global tablist
+    tablist = []  # Reset the global list
 
     # remove the /* */ comments
     sql = re.sub(r"/\*[^*]*\*+(?:[^*/][^*]*\*+)*/", "", sql)
@@ -99,9 +106,14 @@ def tables_in_query_a(sql):
 	# remove trailing -- and # comments
     sql = " ".join([re.split("--|#", line)[0] for line in lines])
 
-    parsed_query = parse(sql)
-    # print(parsed_query)
-    tables = traverse(parsed_query)
+    # Parse SQL using sqlglot
+    try:
+        parsed_query = sqlglot.parse_one(sql, read='postgres')
+        # Traverse the AST to find tables
+        tables = traverse(parsed_query)
+    except Exception as e:
+        # If sqlglot parsing fails, return empty list to trigger fallback
+        raise e
 
     return tables
 
