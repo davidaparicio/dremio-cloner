@@ -332,26 +332,32 @@ class DremioFile():
 
 
 	def _write_wiki_json_file(self, root_dir, wiki):
+		if wiki['entity_id'].startswith('{'):
+			wiki['entity_id'] = "".join(wiki['path'])
 		filepath = os.path.join(root_dir, wiki['entity_id'] + ".json").encode(encoding='utf-8', errors='strict')
 		f = open(filepath, "w", encoding="utf-8")
 		json.dump(wiki, f, indent=4, sort_keys=True)
 		f.close()
 
 
-	def _write_tag_json_file(self, root_dir, wiki):
-		filepath = os.path.join(root_dir, wiki['entity_id'] + ".json").encode(encoding='utf-8', errors='strict')
+	def _write_tag_json_file(self, root_dir, tag):
+		if tag['entity_id'].startswith('{'):
+			tag['entity_id'] = "".join(tag['path'])
+		filepath = os.path.join(root_dir, tag['entity_id'] + ".json").encode(encoding='utf-8', errors='strict')
 		f = open(filepath, "w", encoding="utf-8")
-		json.dump(wiki, f, indent=4, sort_keys=True)
+		json.dump(tag, f, indent=4, sort_keys=True)
 		f.close()
 
-	def _write_rules_json_file(self, root_dir, wiki):
+	def _write_rules_json_file(self, root_dir, rules):
 		filepath = os.path.join(root_dir, "rules.json").encode(encoding='utf-8', errors='strict')
 		f = open(filepath, "w", encoding="utf-8")
-		json.dump(wiki, f, indent=4, sort_keys=True)
+		json.dump(rules, f, indent=4, sort_keys=True)
 		f.close()
 
 
 	def _write_object_json_file(self, root_dir, object):
+		if object['id'].startswith('{'):
+			object['id'] = "".join(object['path'])
 		filepath = os.path.join(root_dir, object['id'] + ".json").encode(encoding='utf-8', errors='strict')
 		f = open(filepath, "w", encoding="utf-8")
 		json.dump(object, f, indent=4, sort_keys=True)

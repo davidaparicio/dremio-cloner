@@ -122,9 +122,14 @@ class DremioWriter:
 			for space in self._d.spaces:
 				if self._config.spaces_to_catalog:
 					space["entityType"] = "folder"
-					space["path"] = [self._config.target_catalog_name, space["name"]]
+					if self._config.target_dremio_cloud_v2:
+						space["path"] = [space["name"]]
+					else:
+						space["path"] = [self._config.target_catalog_name, space["name"]]
 					self._config.source_dremio_spaces.append(space["name"])
-					self._write_folder(space, self._config.folder_process_mode, self._config.folder_ignore_missing_acl_user, self._config.folder_ignore_missing_acl_group)
+					if self._config.target_dremio_cloud_v2:
+						self._write_folder(space, self._config.folder_process_mode, self._config.folder_ignore_missing_acl_user,
+										   self._config.folder_ignore_missing_acl_group, self._config.target_catalog_name if self._config.target_dremio_cloud_v2 else None)
 				else:
 					self._write_space(space, self._config.space_process_mode, self._config.space_ignore_missing_acl_user, self._config.space_ignore_missing_acl_group)
 			if self._config.spaces_to_catalog:
@@ -133,14 +138,15 @@ class DremioWriter:
 			self._logger.info("write_dremio_environment: Skipping folder processing due to configuration folder.process_mode=skip.")
 		else:
 			for folder in self._d.folders:
-				if self._config.spaces_to_catalog:
+				if self._config.spaces_to_catalog and self._config.target_dremio_cloud_v2 == False:
 					folder["path"] = [self._config.target_catalog_name] + folder["path"]
-				self._write_folder(folder, self._config.folder_process_mode, self._config.folder_ignore_missing_acl_user, self._config.folder_ignore_missing_acl_group)
+				self._write_folder(folder, self._config.folder_process_mode, self._config.folder_ignore_missing_acl_user, self._config.folder_ignore_missing_acl_group,
+									   self._config.target_catalog_name if self._config.target_dremio_cloud_v2 else None)
 		if self._config.vds_process_mode == 'skip':
 			self._logger.info("write_dremio_environment: Skipping VDS processing due to configuration vds.process_mode=skip.")
 		else:
 			self._map_vds_source()
-			if self._config.spaces_to_catalog:
+			if self._config.spaces_to_catalog and self._config.target_dremio_cloud_v2 == False:
 				# TODO: implement VDS ordering for arctic target, if needed
 				pass
 			else:
@@ -167,12 +173,12 @@ class DremioWriter:
 			self._logger.info("write_dremio_environment: Skipping wiki processing due to configuration wiki.process_mode=skip.")
 		else:
 			for wiki in self._d.wikis:
-				self._write_wiki(wiki, self._config.wiki_process_mode)
+				self._write_wiki(wiki, self._config.wiki_process_mode, self._config.target_catalog_name if self._config.target_dremio_cloud_v2 else None)
 		if self._config.tag_process_mode == 'skip':
 			self._logger.info("write_dremio_environment: Skipping tag processing due to configuration tag.process_mode=skip.")
 		else:
 			for tags in self._d.tags:
-				self._write_tags(tags, self._config.tag_process_mode)
+				self._write_tags(tags, self._config.tag_process_mode, self._config.target_catalog_name if self._config.target_dremio_cloud_v2 else None)
 		if self._config.udf_process_mode == 'skip':
 			self._logger.info("write_dremio_environment: Skipping user defined function processing due to configuration udf.process_mode=skip.")
 		else:
@@ -360,14 +366,14 @@ class DremioWriter:
 			self._logger.debug("_write_source: skipping entity: " + self._utils.get_entity_desc(entity))
 			return None
 
-	def _write_folder(self, entity, process_mode, ignore_missing_acl_user_flag, ignore_missing_acl_group_flag):
+	def _write_folder(self, entity, process_mode, ignore_missing_acl_user_flag, ignore_missing_acl_group_flag, target_catalog_name=None):
 		# Drop ACL for HOME folders
 		if entity['path'][0][:1] == '@' and 'accessControlList' in entity:
 			entity.pop("accessControlList")
 		# Do not apply space.folder.filter to Home folders
 		if entity['path'][0][:1] == '@' or self._filter.match_space_folder_filter(entity):
 			self._logger.debug("_write_folder: processing entity: " + self._utils.get_entity_desc(entity))
-			return self._write_entity(entity, process_mode, ignore_missing_acl_user_flag, ignore_missing_acl_group_flag)
+			return self._write_entity(entity, process_mode, ignore_missing_acl_user_flag, ignore_missing_acl_group_flag, target_catalog_name)
 		else:
 			self._logger.debug("_write_folder: skipping entity: " + self._utils.get_entity_desc(entity))
 			return None
@@ -519,10 +525,12 @@ class DremioWriter:
 				if item[0] == level:
 					vds = item[1]
 					if self._filter.match_vds_filter(vds):
-						if self._config.spaces_to_catalog:
+						if self._config.spaces_to_catalog and self._config.target_dremio_cloud_v2 == False:
 							self._map_vds_to_arctic(vds)
 						self._logger.debug("_write_vds_hierarchy: writing vds: " + self._utils.get_entity_desc(vds))
-						self._write_entity(vds, self._config.vds_process_mode, self._config.vds_ignore_missing_acl_user, self._config.vds_ignore_missing_acl_group)
+						self._write_entity(vds, self._config.vds_process_mode, self._config.vds_ignore_missing_acl_user, self._config.vds_ignore_missing_acl_group,
+											  self._config.target_catalog_name if self._config.target_dremio_cloud_v2 else None)
+
 
 	def _write_remainder_vds(self):
 		if not self._d.vds_list and not self._unresolved_vds:
@@ -536,10 +544,11 @@ class DremioWriter:
 			for i in range(len(self._d.vds_list) - 1, -1, -1):
 				vds = self._d.vds_list[i]
 				if self._filter.match_vds_filter(vds):
-					if self._config.spaces_to_catalog:
+					if self._config.spaces_to_catalog and self._config.target_dremio_cloud_v2 == False:
 						self._map_vds_to_arctic(vds)
 					self._logger.debug("_write_remainder_vds: writing vds: " + self._utils.get_entity_desc(vds))
-					if self._write_entity(vds, self._config.vds_process_mode, self._config.vds_ignore_missing_acl_user, self._config.vds_ignore_missing_acl_group, False):
+					if self._write_entity(vds, self._config.vds_process_mode, self._config.vds_ignore_missing_acl_user, self._config.vds_ignore_missing_acl_group,
+										  self._config.target_catalog_name if self._config.target_dremio_cloud_v2 else None, False):
 						self._d.vds_list.remove(vds)
 				else:
 					self._d.vds_list.remove(vds)
@@ -548,10 +557,11 @@ class DremioWriter:
 			for i in range(len(self._unresolved_vds) - 1, -1, -1):
 				vds = self._unresolved_vds[i]
 				if self._filter.match_vds_filter(vds):
-					if self._config.spaces_to_catalog:
+					if self._config.spaces_to_catalog and self._config.target_dremio_cloud_v2 == False:
 						self._map_vds_to_arctic(vds)
-					self._logger.debug("_write_remainder_vds: writing vds: " + self._utils.get_entity_desc(vds))
-					if self._write_entity(vds, self._config.vds_process_mode, self._config.vds_ignore_missing_acl_user, self._config.vds_ignore_missing_acl_group, False):
+					self._logger.debug("_write_remainder_vds: writing unsolved vds: " + self._utils.get_entity_desc(vds))
+					if self._write_entity(vds, self._config.vds_process_mode, self._config.vds_ignore_missing_acl_user, self._config.vds_ignore_missing_acl_group,
+										  self._config.target_catalog_name if self._config.target_dremio_cloud_v2 else None,False):
 						self._unresolved_vds.remove(vds)
 				else:
 					self._unresolved_vds.remove(vds)
@@ -562,7 +572,7 @@ class DremioWriter:
 			for vds in self._unresolved_vds:
 				self._logger.error("Failed VDS: " + str(vds['path']))
 		else:
-			self._logger.info("_write_remainder_vds: Finished processing VDSs that failed ordering. All VDSs have been successfuly processed.")
+			self._logger.info("_write_remainder_vds: Finished processing VDSs that failed ordering. All VDSs have been successfully processed.")
 
 
 	def _write_user(self):
@@ -571,7 +581,7 @@ class DremioWriter:
 			return True
 		self._logger.error("_write_user: Cannot create users. API is not implemented.")
 
-	def _write_entity(self, entity, process_mode, ignore_missing_acl_user_flag, ignore_missing_acl_group_flag, report_error = True):
+	def _write_entity(self, entity, process_mode, ignore_missing_acl_user_flag, ignore_missing_acl_group_flag, target_catalog_name=None, report_error = True):
 		self._logger.debug("_write_entity: processing entity: " + self._utils.get_entity_desc(entity))
 		# Clean up the definition
 		if 'id' in entity:
@@ -588,7 +598,7 @@ class DremioWriter:
 			self._logger.info("_write_entity: Skipping entity due to ignore_missing_acl_user_flag, ignore_missing_acl_group_flag: " + self._utils.get_entity_desc(entity))
 			return False
 		# Check if the entity already exists
-		existing_entity = self._read_entity_definition(entity)
+		existing_entity = self._read_entity_definition(entity, target_catalog_name)
 		# Ensure we have not received FOLDER instead of DATASET. See DX-16666
 		if existing_entity is not None and 'entityType' in entity and \
 				'entityType' in existing_entity and entity['entityType'] != existing_entity['entityType']:
@@ -722,7 +732,7 @@ class DremioWriter:
 		if 'canAlter' in reflection:
 			reflection.pop("canAlter")
 		self._map_reflection_source(reflection)
-		if self._config.spaces_to_catalog:
+		if self._config.spaces_to_catalog and self._config.target_dremio_cloud_v2 == False:
 			reflection["path"] = [self._config.target_catalog_name] + reflection["path"]
 		reflection_path = reflection['path']
 		# Write Reflection
@@ -1006,12 +1016,12 @@ class DremioWriter:
 						return {"role": target_role['id'], "permissions": new_permissions}
 		return None
 
-	def _read_entity_definition(self, entity):
+	def _read_entity_definition(self, entity, target_catalog_name=None):
 		self._logger.debug("_read_entity_definition: processing entity: " + self._utils.get_entity_desc(entity))
 		if 'path' in entity:
-			return self._dremio_env.get_catalog_entity_by_path(self._utils.normalize_path(entity['path']))
+			return self._dremio_env.get_catalog_entity_by_path(self._utils.normalize_path([self._config.target_catalog_name] + entity["path"] if target_catalog_name else entity["path"]))
 		elif 'name' in entity:
-			return self._dremio_env.get_catalog_entity_by_path(entity['name'])
+			return self._dremio_env.get_catalog_entity_by_path([self._config.target_catalog_name] + entity["name"] if target_catalog_name else entity["name"])
 		else:
 			self._logger.error("_read_entity_definition: bad data: " + self._utils.get_entity_desc(entity))
 			return None
