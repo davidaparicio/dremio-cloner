@@ -73,6 +73,7 @@ class DremioCloud:
 		self._project_id = project_id
 		self._username = username
 		self._password = password
+		self._detect_api_version()
 		self._authenticate()
 
 	# Auth flow caters for user/password or PAT login
@@ -119,11 +120,11 @@ class DremioCloud:
 		return self._api_get_json(url, source="get_catalog_entity_graph", report_error=report_error)
 
 	def get_user(self, user_id):
-		url = self._url_prefix + self._project_id + self._user_url + user_id
+		url = "ui"+ self._user_url + user_id
 		return self._api_get_json(url, source="get_user")
 
 	def get_user_by_name(self, username):
-		url = self._url_prefix + self._project_id + self._user_by_name_url + username
+		url = "ui" + self._user_by_name_url + username
 		return self._api_get_json(url, source="get_user_by_name")
 
 	def get_role(self, role_id):
@@ -349,7 +350,8 @@ class DremioCloud:
 	# Returns JSON if success or None
 	def _api_get_json(self, url, source="", report_error=True, reauthenticate=False):
 		if reauthenticate:
-			self._authenticate()
+			self._detect_api_version()
+		self._authenticate()
 		# Extract source
 		source_name = None
 		pos = url.find(self._catalog_url_by_path)
@@ -365,7 +367,17 @@ class DremioCloud:
 		try:
 			if source_name in self._timed_out_sources and not self._retry_timedout_source:
 				raise requests.exceptions.Timeout()
-			response = self._session.request("GET", self._endpoint + url, headers=self._headers, timeout=self._api_timeout, verify=self._verify_ssl)
+			endpoint = self._login_endpoint if source is not None and (source == "get_user" or source == "get_user_by_name") else self._endpoint
+			attempts = 0
+			response = self._session.request("GET", endpoint + url, headers=self._headers, timeout=self._api_timeout, verify=self._verify_ssl)
+			status = response.status_code
+			while attempts < 3 and status == 400:
+				attempts = attempts + 1
+				logging.debug("Received 400 - Letting API breathe for 5 seconds, then trying previous request again")
+				time.sleep(5)
+				response = self._session.request("GET", endpoint + url, headers=self._headers, timeout=self._api_timeout, verify=self._verify_ssl)
+				status = response.status_code
+
 			if response.status_code == 200:
 				return response.json()
 			elif response.status_code == 400:  # Bad Request
@@ -382,8 +394,9 @@ class DremioCloud:
 					return self._api_get_json(url, source, report_error, True)
 				logging.critical(source + ": received HTTP Response Code " + str(response.status_code) +
 								 " for : <" + str(url) + ">" + self._get_error_message(response))
-				raise RuntimeError(
-					"Specified user does not have sufficient priviliges to create objects in the target Dremio Environment.")
+				return None
+				#raise RuntimeError(
+				#	"Specified user does not have sufficient priviliges to read objects in the target Dremio Environment.")
 			else:
 				if report_error:
 					logging.error(source + ": received HTTP Response Code " + str(response.status_code) +
@@ -405,7 +418,8 @@ class DremioCloud:
 	# Returns JSON if success or None
 	def _api_post_json(self, url, json_data, source="", as_json=True, reauthenticate=False):
 		if reauthenticate:
-			self._authenticate()
+			self._detect_api_version()
+		self._authenticate()
 		try:
 			if json_data is None:
 				response = self._session.request("POST", self._endpoint + url, headers=self._headers, timeout=self._api_timeout, verify=self._verify_ssl)
@@ -449,7 +463,8 @@ class DremioCloud:
 	# Returns JSON if success or None
 	def _api_put_json(self, url, json_data, source="", report_error = True, reauthenticate=False):
 		if reauthenticate:
-			self._authenticate()
+			self._detect_api_version()
+		self._authenticate()
 		try:
 			response = self._session.request("PUT", self._endpoint + url, json=json_data, headers=self._headers, timeout=self._api_timeout, verify=self._verify_ssl)
 			if response.status_code == 200:
@@ -497,7 +512,8 @@ class DremioCloud:
 	# Returns JSON if success or None
 	def _api_delete(self, url, source="", report_error = True, reauthenticate=False):
 		if reauthenticate:
-			self._authenticate()
+			self._detect_api_version()
+		self._authenticate()
 		try:
 			response = self._session.request("DELETE", self._endpoint + url, headers=self._headers, timeout=self._api_timeout, verify=self._verify_ssl)
 			if response.status_code == 200:
@@ -518,7 +534,7 @@ class DremioCloud:
 				logging.critical(source + ": received HTTP Response Code " + str(response.status_code) +
 								 " for : <" + str(url) + ">" + self._get_error_message(response))
 				raise RuntimeError(
-					"Specified user does not have sufficient priviliges to create objects in the target Dremio Environment.")
+					"Specified user does not have sufficient priviliges to delete objects in the target Dremio Environment.")
 			elif response.status_code == 409:  # A catalog entity with the specified path already exists.
 				if report_error:
 					logging.error(source + ": received HTTP Response Code 409 for : <" + str(url) + ">" +
@@ -560,3 +576,16 @@ class DremioCloud:
 			return urllib.parse.quote_plus(path)
 		else:
 			return urllib.quote_plus(path)
+	def _detect_api_version(self):
+		"""Detect API version based on endpoint structure"""
+		if 'staging.dremio.site' in self._endpoint or 'test.dremio.site' in self._endpoint:
+			self._api_version = "v2"
+			logging.info("Detected Dremio Cloud V2 (serverless) API endpoint")
+		else:
+			self._api_version = "v1"
+			logging.info("Detected Dremio V1 (standard) API endpoint")
+
+	def set_serverless_mode(self, is_serverless):
+		"""Set serverless mode flag"""
+		self._is_serverless = is_serverless
+

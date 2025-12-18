@@ -17,6 +17,7 @@
 
 from Dremio import Dremio
 from DremioCloud import DremioCloud
+from DremioCloudV2 import DremioCloudV2
 from DremioFile import DremioFile
 from DremioReader import DremioReader
 from DremioWriter import DremioWriter
@@ -53,10 +54,16 @@ Make sure the config file is correct. """)
 
 def get_dremio_environment(config):
 	logging.info("Executing command 'get'.")
-	# Added a DremioCloud class for interacting directly with Dremio Cloud without upsetting the DremioWriter and DremioReader code
+	# Use DremioCloudV2 for Cloud V2 (serverless), DremioCloud for Cloud V1 (standard)
 	if config.source_dremio_cloud:
-		dremio = DremioCloud(config.source_endpoint, config.source_username, config.source_password, config.source_dremio_cloud_org_id, config.source_dremio_cloud_project_id,
-						   config.http_timeout,	verify_ssl=config.source_verify_ssl)
+		if config.source_dremio_cloud_v2:
+			dremio = DremioCloudV2(config.source_endpoint, config.source_username, config.source_password, config.source_dremio_cloud_org_id, config.source_dremio_cloud_project_id,
+							   config.http_timeout, verify_ssl=config.source_verify_ssl)
+			logging.info("Source is configured as Dremio Cloud V2 (serverless) - API Version: %s, Serverless: %s", dremio.get_api_version(), dremio.is_serverless())
+		else:
+			dremio = DremioCloud(config.source_endpoint, config.source_username, config.source_password, config.source_dremio_cloud_org_id, config.source_dremio_cloud_project_id,
+							   config.http_timeout, verify_ssl=config.source_verify_ssl)
+			logging.info("Source is configured as Dremio Cloud V1 (standard)")
 	else:
 		dremio = Dremio(config.source_endpoint, config.source_username, config.source_password, False, config.http_timeout, config.source_retry_timedout, config.source_verify_ssl)
 	reader = DremioReader(dremio, config)
@@ -71,10 +78,16 @@ def put_dremio_environment(config):
 	logging.info("Executing command 'put'.")
 	file = DremioFile(config)
 	dremio_data = file.read_dremio_environment()
-	#Added a DremioCloud class for interacting directly with Dremio Cloud without upsetting the DremioWriter and DremioReader code
+	# Use DremioCloudV2 for Cloud V2 (serverless), DremioCloud for Cloud V1 (standard)
 	if config.target_dremio_cloud:
-		dremio = DremioCloud(config.target_endpoint, config.target_username, config.target_password, config.target_dremio_cloud_org_id, config.target_dremio_cloud_project_id,
-						   config.http_timeout,	verify_ssl=config.target_verify_ssl)
+		if config.target_dremio_cloud_v2:
+			dremio = DremioCloudV2(config.target_endpoint, config.target_username, config.target_password, config.target_dremio_cloud_org_id, config.target_dremio_cloud_project_id,
+							   config.http_timeout, verify_ssl=config.target_verify_ssl)
+			logging.info("Target is configured as Dremio Cloud V2 (serverless) - API Version: %s, Serverless: %s", dremio.get_api_version(), dremio.is_serverless())
+		else:
+			dremio = DremioCloud(config.target_endpoint, config.target_username, config.target_password, config.target_dremio_cloud_org_id, config.target_dremio_cloud_project_id,
+							   config.http_timeout, verify_ssl=config.target_verify_ssl)
+			logging.info("Target is configured as Dremio Cloud V1 (standard)")
 	else:
 		dremio = Dremio(config.target_endpoint, config.target_username, config.target_password, config.target_accept_eula, config.http_timeout, verify_ssl=config.target_verify_ssl)
 	writer = DremioWriter(dremio, dremio_data, config)

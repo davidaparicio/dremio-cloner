@@ -1,0 +1,98 @@
+{
+  "dremio_cloner": [
+    {
+      "command": "get"
+    },
+    {
+      "source": [
+        {
+          "endpoint": "https://api.dremio.cloud"
+        },
+        {
+          "username": "user@example.com"
+        },
+        {
+          "password": "your_password_here"
+        },
+        {
+          "is_dremio_cloud": true
+        },
+        {
+          "dremio_cloud_org_id": "source-org-id"
+        },
+        {
+          "dremio_cloud_project_id": "source-project-id"
+        },
+        {
+          "dremio_cloud_v2": false
+        }
+      ]
+    },
+    {
+      "target": [
+        {
+          "endpoint": "https://api.dremio.cloud"
+        },
+        {
+          "username": "user@example.com"
+        },
+        {
+          "password": "your_password_here"
+        },
+        {
+          "is_dremio_cloud": true
+        },
+        {
+          "dremio_cloud_org_id": "target-org-id"
+        },
+        {
+          "dremio_cloud_project_id": "target-project-id-v2"
+        },
+        {
+          "dremio_cloud_v2": true
+        },
+        {
+          "dremio_cloud_vendor": "AWS"
+        },
+        {
+          "dremio_cloud_region": "us-west-2"
+        }
+      ]
+    },
+    {
+      "options": [
+        {
+          "dry_run": true
+        },
+        {
+          "logging.level": "logging.INFO"
+        },
+        {
+          "logging.filename": "dremio_cloner_cloud_v2.log"
+        },
+        {
+          "space.process_mode": "process"
+        },
+        {
+          "source.process_mode": "process"
+        },
+        {
+          "source.pds.process_mode": "process"
+        },
+        {
+          "vds.process_mode": "process"
+        },
+        {
+          "reflection.process_mode": "process"
+        },
+        {
+          "wiki.process_mode": "process"
+        },
+        {
+          "tag.process_mode": "process"
+        }
+      ]
+    }
+  ]
+}
+

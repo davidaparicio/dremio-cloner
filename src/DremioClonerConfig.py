@@ -45,6 +45,7 @@ class DremioClonerConfig():
 	source_ce = False
 	source_graph_support = False
 	source_dremio_cloud = False
+	source_dremio_cloud_v2 = False
 	source_dremio_cloud_org_id = None
 	source_dremio_cloud_project_id = None
 
@@ -63,6 +64,7 @@ class DremioClonerConfig():
 	target_dremio_cloud = False
 	target_dremio_cloud_org_id = None
 	target_dremio_cloud_project_id = None
+	target_dremio_cloud_v2 = False
 	target_catalog_name = None
 	spaces_to_catalog = False
 	source_catalog_name = None
@@ -241,6 +243,8 @@ class DremioClonerConfig():
 				self.target_dremio_cloud_org_id = item['dremio_cloud_org_id']
 			elif 'dremio_cloud_project_id' in item:
 				self.target_dremio_cloud_project_id = item['dremio_cloud_project_id']
+			elif 'dremio_cloud_v2' in item:
+				self.target_dremio_cloud_v2 = self._bool(item, 'dremio_cloud_v2')
 			elif 'dremio_cloud_target_catalog_name' in item:
 				self.target_catalog_name = item['dremio_cloud_target_catalog_name']
 			elif 'dremio_cloud_spaces_to_catalog' in item:
@@ -276,6 +280,8 @@ class DremioClonerConfig():
 				self.source_dremio_cloud_project_id = item['dremio_cloud_project_id']
 			elif 'dremio_cloud_source_catalog_name' in item:
 				self.source_catalog_name = item['dremio_cloud_source_catalog_name']
+			elif 'dremio_cloud_v2' in item:
+				self.source_dremio_cloud_v2 = self._bool(item, 'dremio_cloud_v2')
 
 	def _process_options(self, json_conf):
 		for item in json_conf['options']:
