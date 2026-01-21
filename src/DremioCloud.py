@@ -351,7 +351,7 @@ class DremioCloud:
 	def _api_get_json(self, url, source="", report_error=True, reauthenticate=False):
 		if reauthenticate:
 			self._detect_api_version()
-		self._authenticate()
+			self._authenticate()
 		# Extract source
 		source_name = None
 		pos = url.find(self._catalog_url_by_path)
@@ -419,7 +419,7 @@ class DremioCloud:
 	def _api_post_json(self, url, json_data, source="", as_json=True, reauthenticate=False):
 		if reauthenticate:
 			self._detect_api_version()
-		self._authenticate()
+			self._authenticate()
 		try:
 			if json_data is None:
 				response = self._session.request("POST", self._endpoint + url, headers=self._headers, timeout=self._api_timeout, verify=self._verify_ssl)
@@ -464,7 +464,7 @@ class DremioCloud:
 	def _api_put_json(self, url, json_data, source="", report_error = True, reauthenticate=False):
 		if reauthenticate:
 			self._detect_api_version()
-		self._authenticate()
+			self._authenticate()
 		try:
 			response = self._session.request("PUT", self._endpoint + url, json=json_data, headers=self._headers, timeout=self._api_timeout, verify=self._verify_ssl)
 			if response.status_code == 200:
@@ -513,7 +513,7 @@ class DremioCloud:
 	def _api_delete(self, url, source="", report_error = True, reauthenticate=False):
 		if reauthenticate:
 			self._detect_api_version()
-		self._authenticate()
+			self._authenticate()
 		try:
 			response = self._session.request("DELETE", self._endpoint + url, headers=self._headers, timeout=self._api_timeout, verify=self._verify_ssl)
 			if response.status_code == 200:
