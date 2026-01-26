@@ -1042,35 +1042,36 @@ class DremioWriter:
 			any_dependency_unresolved = False
 			sql_dependency_paths = self._get_vds_dependency_paths(vds)
 			# Iterate through SQL dependencies to determine level of hierarchy for each dependency and the VDS
-			for path in sql_dependency_paths:
-				self._logger.debug("_order_vds: processing sql dependency " + path)
-				# Validate the dependency against VDS and PDS
-				sql_context = self._utils.get_sql_context(vds)
-				dependency_vds = self._find_vds_by_path(self._utils.get_absolute_path(path, sql_context))
-				if dependency_vds is None:
-					dependency_pds = self._find_pds_by_path(self._utils.get_absolute_path(path, sql_context))
-					if dependency_pds is None:
-						# Dependency could not be resolved.
-						self._logger.warn("_order_vds: giving up on ordering VDS '" + self._utils.normalize_path(vds['path']) + "'. Could not resolve dependency '" + self._utils.get_absolute_path(path, sql_context) + "' Will try to process without ordering.")
-						# Move VDS into unresolved list
-						self._unresolved_vds.append(vds)
-						self._d.vds_list.remove(vds)
-						# Mark as do-not-process
-						any_dependency_unresolved = True
-						break
+			if sql_dependency_paths:
+				for path in sql_dependency_paths:
+					self._logger.debug("_order_vds: processing sql dependency " + path)
+					# Validate the dependency against VDS and PDS
+					sql_context = self._utils.get_sql_context(vds)
+					dependency_vds = self._find_vds_by_path(self._utils.get_absolute_path(path, sql_context))
+					if dependency_vds is None:
+						dependency_pds = self._find_pds_by_path(self._utils.get_absolute_path(path, sql_context))
+						if dependency_pds is None:
+							# Dependency could not be resolved.
+							self._logger.warn("_order_vds: giving up on ordering VDS '" + self._utils.normalize_path(vds['path']) + "'. Could not resolve dependency '" + self._utils.get_absolute_path(path, sql_context) + "' Will try to process without ordering.")
+							# Move VDS into unresolved list
+							self._unresolved_vds.append(vds)
+							self._d.vds_list.remove(vds)
+							# Mark as do-not-process
+							any_dependency_unresolved = True
+							break
+						else:
+							# The dependency has been resolved as PDS, continue to the next dependency
+							continue
 					else:
-						# The dependency has been resolved as PDS, continue to the next dependency
-						continue
-				else:
-					# Dependency was found as VDS
-					dependency_hierarchy_level = self._find_vds_level_in_hierarchy(dependency_vds['id'])
-					if dependency_hierarchy_level is None:
-						# Dependency has not been processed yet, push this VDS to the next processing level
-						vds_hierarchy_level = None
-						break
-					# Find the highest level of hierarchy among dependencies
-					elif vds_hierarchy_level < dependency_hierarchy_level + 1:
-						vds_hierarchy_level = dependency_hierarchy_level + 1
+						# Dependency was found as VDS
+						dependency_hierarchy_level = self._find_vds_level_in_hierarchy(dependency_vds['id'])
+						if dependency_hierarchy_level is None:
+							# Dependency has not been processed yet, push this VDS to the next processing level
+							vds_hierarchy_level = None
+							break
+						# Find the highest level of hierarchy among dependencies
+						elif vds_hierarchy_level < dependency_hierarchy_level + 1:
+							vds_hierarchy_level = dependency_hierarchy_level + 1
 			if any_dependency_unresolved or vds_hierarchy_level is None:
 				# Do not process this VDS at this recursion
 				self._logger.debug("_order_vds: some dependencies cannot be validated for entity " + vds['id'] + " at processing level " + str(processing_level))
@@ -1151,7 +1152,7 @@ class DremioWriter:
 		return self._logger.errors_encountered
 
 
-	def _write_wiki(self, wiki, process_mode):
+	def _write_wiki(self, wiki, process_mode, target_catalog_name=None):
 		self._logger.debug("_write_wiki: processing wiki: " + str(wiki))
 		self._map_wiki_source(wiki)
 		new_wiki_text = wiki['text']
@@ -1195,7 +1196,7 @@ class DremioWriter:
 		return True
 
 
-	def _write_tags(self, tags, process_mode):
+	def _write_tags(self, tags, process_mode, target_catalog_name=None):
 		self._logger.debug("_write_tag: processing tags: " + str(tags))
 		self._map_tag_source(tags)
 		new_tags = tags['tags']
